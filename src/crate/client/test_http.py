@@ -436,6 +436,19 @@ class RequestsCaBundleTest(TestCase):
         self.assertTrue('foobar' in d)
 
 
+class TimeoutRequestHandler(BaseHTTPRequestHandler):
+    """
+    HTTP handler for use with TestingHTTPServer
+    updates the shared counter and waits so that the client times out
+    """
+
+    def do_POST(self):
+        print('POST /_sql')
+        print(self.headers)
+        self.server.SHARED['count'] += 1
+        time.sleep(5)
+
+
 class SharedStateRequestHandler(BaseHTTPRequestHandler):
     """
     HTTP handler for use with TestingHTTPServer
@@ -491,8 +504,6 @@ class TestingHTTPServer(HTTPServer):
 
 class TestingHttpServerTestCase(TestCase):
 
-    request_handler = SharedStateRequestHandler
-
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.assertIsNotNone(self.request_handler)
@@ -521,10 +532,12 @@ class TestingHttpServerTestCase(TestCase):
         self.server_process.terminate()
 
     def clientWithKwargs(self, **kwargs):
-        return Client(["%s:%d" % self.server_address], timeout=5, **kwargs)
+        return Client(["%s:%d" % self.server_address], timeout=1, **kwargs)
 
 
 class RetryOnTimeoutServerTest(TestingHttpServerTestCase):
+
+    request_handler = TimeoutRequestHandler
 
     def setUp(self):
         super().setUp()
@@ -535,11 +548,17 @@ class RetryOnTimeoutServerTest(TestingHttpServerTestCase):
         self.client.close()
 
     def test_no_retry_on_read_timeout(self):
-        self.client.sql("select * from fake")
+        try:
+            self.client.sql("select * from fake")
+        except ConnectionError as e:
+            self.assertTrue('Read timed out' in e.message,
+                            msg='Error message must contain: Read timed out')
         self.assertEqual(TestingHTTPServer.SHARED['count'], 1)
 
 
 class TestDefaultSchemaHeader(TestingHttpServerTestCase):
+
+    request_handler = SharedStateRequestHandler
 
     def setUp(self):
         super().setUp()
@@ -555,6 +574,8 @@ class TestDefaultSchemaHeader(TestingHttpServerTestCase):
 
 
 class TestUsernameSentAsHeader(TestingHttpServerTestCase):
+
+    request_handler = SharedStateRequestHandler
 
     def setUp(self):
         super().setUp()
